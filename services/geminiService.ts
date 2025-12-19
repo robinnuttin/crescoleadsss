@@ -41,70 +41,177 @@ export const askCoach = async (query: string, context: any): Promise<string> => 
   }
 };
 
-export const generateLeads = async (filters: FilterState): Promise<Lead[]> => {
+const fetchSubLocations = async (location: string): Promise<string[]> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const prompt = `Start DEEP RESEARCH voor ${filters.sector} in regio ${filters.location}. 
-  
-  SCRAPING COMMANDS:
-  - Gebruik Google Search & Maps om alle relevante bedrijven te vinden.
-  - Voer voor ELKE lead een virtuele website scrape uit.
-  - Zoek specifiek naar de Zaakvoerder/CEO op LinkedIn.
-  - Vind Persoonlijk 04-mobiel en persoonlijk emailadres van de CEO.
-  - Check FB/IG pagina's voor extra contactpunten.
-  
-  CRITICAL DATA REQUIREMENTS (JSON):
-  - companyName, sector, city, website, emailCompany, phoneCompany.
-  - ceoName, ceoEmail, ceoPhone, ceoLinkedIn, address.
-  - analysis: { websiteScore, performanceScore, seoStatus, marketingBottlenecks[], revenueEstimate, socialLinks: { facebook, instagram, linkedin }, linkedinActivity, linkedinPostFrequency }.
-  
-  MATCH MET LEAD INTERFACE EN RETOURNEER ARRAY.`;
+  const prompt = `Geef een lijst van de 5 belangrijkste deelgemeentes, districten of omliggende belangrijke locaties voor de regio: ${location}.
+  Retourneer ALLEEN een JSON array van strings. Voorbeeld: ["Deurne", "Berchem", "Merksem", "Wilrijk", "Hoboken"].`;
 
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-pro-preview",
+      model: "gemini-2.0-flash",
       contents: prompt,
-      config: {
-        systemInstruction: getSystemInstruction(),
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json"
-      }
+      config: { responseMimeType: "application/json" }
     });
-
-    const parsedData = JSON.parse(response.text || '[]');
-    return parsedData.map((lead: any) => ({
-      ...lead,
-      id: Math.random().toString(36).substr(2, 9),
-      callAttempts: 0,
-      interactions: [],
-      pipelineTag: 'pending',
-      scrapedAt: new Date().toISOString(),
-      confidenceScore: lead.confidenceScore || Math.floor(Math.random() * 20) + 80,
-      analysis: {
-        ...lead.analysis,
-        websiteScore: lead.analysis?.websiteScore || 5,
-        performanceScore: lead.analysis?.performanceScore || 5,
-        seoStatus: lead.analysis?.seoStatus || 'Gemiddeld',
-        pagesCount: lead.analysis?.pagesCount || 5,
-        recommendedChannel: lead.recommendedChannel || 'coldcall'
-      }
-    }));
-  } catch (error) {
-    console.error("Scraping error:", error);
-    return [];
+    return JSON.parse(response.text || '[]');
+  } catch (e) {
+    console.error("Locatie split error:", e);
+    return [location];
   }
+};
+
+const fetchNicheKeywords = async (sector: string): Promise<string[]> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const prompt = `Geef mij 3-5 specifieke niche zoektermen of synoniemen voor de sector: "${sector}".
+  Doe dit om de markt maximaal te fragmenteren.
+  Bijvoorbeeld: voor "Dakwerker" -> ["Platte daken", "Dakisolatie", "Rieten daken", "Leien daken", "Dakrenovatie"].
+  Retourneer ALLEEN een JSON array van strings.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: prompt,
+      config: { responseMimeType: "application/json" }
+    });
+    return JSON.parse(response.text || '[]');
+  } catch (e) {
+    console.error("Keyword split error:", e);
+    return [sector];
+  }
+};
+
+export const generateLeads = async (filters: FilterState): Promise<Lead[]> => {
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+  // 1. ULTRA DEEP LOOP: Locations * Keywords
+  let searchLocations = [filters.location];
+  if (filters.includeSmallTowns) {
+    const subLocs = await fetchSubLocations(filters.location);
+    searchLocations = [...new Set([filters.location, ...subLocs])];
+  }
+
+  let searchKeywords = [filters.sector];
+  // Always split keywords for maximum coverage as requested
+  const subKeywords = await fetchNicheKeywords(filters.sector);
+  searchKeywords = [...new Set([filters.sector, ...subKeywords])];
+
+  console.log(`ULTRA DEEP LOOP: ${searchLocations.length} Locations x ${searchKeywords.length} Keywords = ${searchLocations.length * searchKeywords.length} Searches`);
+
+  let allLeads: Lead[] = [];
+  const seenUrls = new Set<string>();
+
+  // 2. Execute Matrix Searches
+  const searchPromises: Promise<any>[] = [];
+
+  for (const loc of searchLocations) {
+    for (const kw of searchKeywords) {
+      searchPromises.push((async () => {
+        const prompt = `START UITGEBREID ONDERZOEK voor: "${kw}" in regio "${loc}".
+            
+            OPDRACHT:
+            1. Zoek naar bedrijven die actief zijn als ${kw} in ${loc}.
+            2. VIRTUELE SCRAPE: Bezoek virtueel hun website.
+            3. FINANCIALS & DATA (KBO/Companyweb):
+               - Zoek naar BTW-nummer (BE0...).
+               - Zoek naar officiele omzet (bruto marge) op publieke bronnen (KBO, Staatsblad).
+               - Schat aantal werknemers.
+            4. SOCIALS & ADS:
+               - Check of ze Facebook/Instagram hebben.
+               - Check in Ad Libraries of ze ooit advertenties hebben gedraaid.
+            5. DOCUMENTATIE:
+               - CEO Naam + Prive nummer/email opsporen.
+               - SEO Audit: Hoeveel paginas? Snelheid? SEO Score op 10?
+
+            RETURN JSON ARRAY:
+            - companyName, sector, city, website, emailCompany, phoneCompany.
+            - vatNumber (BTW), revenueEstimate (Omzet), employeeCount (Werknemers).
+            - adStatus (Active/Past/None).
+            - ceoName, ceoEmail, ceoPhone, ceoLinkedIn, address.
+            - analysis: { 
+                websiteScore (0-10), 
+                seoStatusDetails (String), 
+                visualScore (0-10),
+                revenueEstimate, 
+                socialLinks: { facebook, instagram, linkedin }, 
+                adHistoryDetails (String) 
+              }.
+            `;
+
+        try {
+          // Use random delay to avoid rate limiting burst
+          await new Promise(r => setTimeout(r, Math.random() * 2000));
+
+          const response = await ai.models.generateContent({
+            model: "gemini-2.0-pro-exp-02-11",
+            contents: prompt,
+            config: {
+              systemInstruction: getSystemInstruction(),
+              tools: [{ googleSearch: {} }],
+              responseMimeType: "application/json"
+            }
+          });
+
+          return JSON.parse(response.text || '[]');
+        } catch (error) {
+          console.error(`Error scraping ${kw} in ${loc}:`, error);
+          return [];
+        }
+      })());
+    }
+  }
+
+  const results = await Promise.all(searchPromises);
+
+  // 3. Flatten and Dedup
+  results.flat().forEach((lead: any) => {
+    if (lead.website && !seenUrls.has(lead.website)) {
+      seenUrls.add(lead.website);
+      allLeads.push({
+        ...lead,
+        id: Math.random().toString(36).substr(2, 9),
+        callAttempts: 0,
+        interactions: [],
+        pipelineTag: 'pending',
+        scrapedAt: new Date().toISOString(),
+        confidenceScore: lead.confidenceScore || Math.floor(Math.random() * 20) + 80,
+        analysis: {
+          ...lead.analysis,
+          websiteScore: lead.analysis?.websiteScore || 5,
+          performanceScore: lead.analysis?.performanceScore || 5,
+          seoStatus: lead.analysis?.seoStatus || 'Gemiddeld',
+          pagesCount: lead.analysis?.pagesCount || 5,
+          recommendedChannel: lead.recommendedChannel || 'coldcall'
+        }
+      });
+    }
+  });
+
+  return allLeads;
 };
 
 export const enrichLead = async (lead: Lead): Promise<Lead> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const prompt = `DEEP RESEARCH & VALIDATION for: ${lead.companyName} (${lead.website || 'zoeken...'}). 
+  const prompt = `ULTRA DEEP VALIDATION for: ${lead.companyName} (${lead.website || 'zoeken...'}). 
   
-  INSTRUCTIES:
-  1. Scrape de website grondig voor e-mail en telefoon.
-  2. Zoek op LinkedIn naar de CEO/Eigenaar van ${lead.companyName}.
-  3. Zoek op Google Maps voor validatie van adres en populariteit.
-  4. Valideer ALLE persoonlijke gegevens.
+  ONDERZOEKSDOMEINEN:
+  1. FINANCIEEL & JURIDISCH:
+     - Check KBO/Kruispuntbank/Companyweb voor BTW-nummer en status (Actief?).
+     - Zoek recentste omzetcijfers of brutomarge.
+     - Aantal werknemers (officiële VTE).
+     
+  2. CONTACT & CEO:
+     - Zoek GSM nummers van zaakvoerder "${lead.ceoName}" (04xx...).
+     - Zoek direct email adres.
+     
+  3. MARKETING HISTORIEK:
+     - Check Facebook Ad Library: Hebben ze actieve ads?
+     - Check Google Ads Transparency Center: Draaien ze ads?
+     
+  4. WEBSITE & SEO AUDIT:
+     - Tel aantal indexeerbare pagina's.
+     - Geef een SEO score op 10.
+     - Analyseer de look & feel (Premium vs Verouderd).
   
-  RETOURNEER EEN VOLLEDIG LEAD OBJECT (JSON).`;
+  RETOURNEER EEN COMPLETE JSON UPDATE.`;
 
   try {
     const response = await ai.models.generateContent({
@@ -133,7 +240,7 @@ export const startLiveDialerSession = async (
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-  
+
   const sessionPromise = ai.live.connect({
     model: 'gemini-2.5-flash-native-audio-preview-09-2025',
     callbacks: {
