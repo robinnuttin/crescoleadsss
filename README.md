@@ -1,11 +1,28 @@
-<div align="center">
+# LeadScraper Pro X
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Een geavanceerde, AI-gestuurde lead scraping applicatie specifiek voor de Belgische en Nederlandse markt.
 
-  <h1>Built with AI Studio</h2>
+## Functionaliteiten
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+*   **Deep Loop Scraping**: Zoekt in meerdere rondes per regio om maximale resultaten te behalen.
+*   **Database ("Alle Leads")**: Slaat alle gescrapte leads lokaal op zodat er een historiek ontstaat.
+*   **Ontdubbeling**: Zorgt ervoor dat u nooit dubbele kosten of leads heeft, zowel binnen een sessie als tegenover de historische database.
+*   **Diepgaande Analyse**:
+    *   Website quality check (0-10 score)
+    *   Advertentie detectie (Google/Meta)
+    *   CEO/Zaakvoerder detectie
+    *   Social media links
+*   **CSV Export**: Download leads met één klik.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## Installatie
 
-</div>
+1.  Clone de repository.
+2.  Zorg voor een geldige `API_KEY` in uw environment variables (voor Google Gemini API).
+3.  Start de applicatie (via index.html of uw development server).
+
+## Gebruik
+
+1.  Ga naar **Lead Scraper**.
+2.  Vul sector en locatie in (bv. "Dakwerkers" in "Antwerpen").
+3.  Klik op **Start Scraping**.
+4.  De resultaten verschijnen live en worden automatisch opgeslagen in **Alle Leads**.

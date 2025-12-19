@@ -1,0 +1,7 @@
+{
+  "name": "Copy of LeadScraper Pro X",
+  "description": "AI-gestuurde lead generation, CRM integratie en Live Sales & Cold Call Dialer.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
